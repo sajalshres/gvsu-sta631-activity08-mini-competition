@@ -6,3 +6,168 @@ output: github_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
+
+## Imports
+
+```{r imports, warning=FALSE, message=FALSE}
+library("knitr")
+library("kableExtra")
+library("tidyverse")
+library("tidymodels")
+library("GGally")
+library("psych")
+library("discrim")
+library("poissonreg")
+library("ggfortify")
+```
+
+## Load Data
+
+```{r}
+inventory <- readr::read_csv("inventory.csv")
+```
+
+## Data Exploration
+
+```{r}
+summary(inventory)
+```
+
+```{r}
+ggplot(inventory, aes(x=week, y=sold)) +
+  geom_point()
+```
+
+```{r, message=FALSE, warning=FALSE}
+ggplot(inventory, aes(x=week, y=sold)) +
+  geom_col()
+```
+
+```{r}
+length(unique(inventory$item_no))
+```
+
+```{r}
+inventory %>% group_by(item_no) %>% 
+  tally(sold) %>% 
+  arrange(desc(n))
+```
+
+```{r}
+sales_weekly <- inventory %>%
+  group_by(week) %>% 
+  tally(sold) %>% 
+  arrange(desc(n))
+
+p1 <- ggplot(sales_weekly, aes(week, n))
+
+p1 + geom_line()
+```
+
+```{r}
+inventory %>% 
+  ggplot(aes(week, sold, group=item_no)) +
+    geom_line(alpha= 1/3)
+```
+
+```{r}
+inventory %>% 
+  ggplot(aes(week, sold)) +
+    geom_line(alpha= 1/3)
+```
+
+```{r}
+top10 <- inventory %>% group_by(item_no) %>% 
+  tally(sold) %>% 
+  arrange(desc(n)) %>% 
+  slice(1:10) 
+
+top10_vec <- top10$item_no
+
+inventory %>%  filter(item_no %in% top10_vec) %>% 
+  ggplot(aes(week, sold, color=item_no)) +
+    geom_line(alpha= 1/2)
+```
+
+```{r}
+inventory %>%  filter(item_no %in% top10_vec) %>% 
+  ggplot(aes(x=week, y=sold, fill=item_no)) +
+    geom_col()
+```
+
+## Prepare Data
+
+```{r}
+inventory %>%
+  group_by(item_no, week) %>%
+  filter(sold != 0)%>%
+  summarise(sold_weekly = sum(sold), sold_mean = mean(sold))
+```
+
+```{r}
+set.seed(631)
+split <- inventory %>% initial_split(prop=0.8, strata=sold)
+train <- split %>% training()
+test <- split %>% testing()
+```
+
+## Fit and Evaludate Model
+
+```{r}
+length(models)
+```
+
+```{r}
+glm(sold ~ item_no + week, family = quasipoisson, data=inventory)
+```
+
+```{r}
+set.seed(631)
+
+split <- inventory %>% initial_split(prop=0.8, strata=sold)
+train <- split %>% training()
+test <- split %>% testing()
+
+items <- unique(train$item_no)
+apply_model <- function(item) {
+  # subset of train data for current item
+  data <- subset(train, item_no = item)
+  
+  # execute glm with poisson
+  model <- glm(sold ~ week, data = data, family = "poisson")
+  
+  # return the model
+  return(model)
+}
+models <- pbapply::pblapply(items, apply_model)
+```
+
+```{r}
+test_items <- unique(test$item_no)
+predict_model <- function(index, test_data, models) {
+  # subset of train data for current item
+  data <- subset(test, item_no = test_items[index])
+  
+  prediction <- predict(models[[index]], newdata = data, type = "response")
+  
+  return(prediction)
+}
+
+predictions <- pbapply::pblapply(1:length(test_items), function(index) predict_model(index, test_data=test, models=models))
+```
+
+```{r}
+regclass::confusion_matrix(models[[1]])
+```
+
+```{r}
+pscl::pR2(model)["McFadden"]
+```
+
+```{r}
+pred_class <- predict(model, test, type="response")
+results <- test %>%
+  select(sold) %>%
+  add_column(pred_class)
+accuracy(results, truth = sold, estimate = pred_class)
+```
